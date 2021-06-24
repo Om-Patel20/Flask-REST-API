@@ -1,23 +1,73 @@
-import os
-
+from Section_7.code.blacklist import BLACKLIST
 from flask import Flask
+from flask.json import jsonify
 from flask_restful import Api
+from flask_jwt_extended import JWTManager
 from flask_jwt import JWT
-
-from security import authenticate, identity # Separate python file
-from resources.user import UserRegister
-from resources.item import Item
-from resources.item import ItemList
-from resources.store import Store
-from resources.store import StoreList
+from resources.user import UserRegister, User, UserLogin, UserLogout, TokenRefresh
+from resources.item import Item, ItemList
+from resources.store import Store, StoreList
+from blacklist import BLACKLIST
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///data.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = 'ohm'
+app.config['PROPAGATE_EXCEPTIONS'] = True
+app.config['JWT_BLACKLIST_ENABLED'] = True
+app.config['JWT_BLACKLIST_TOKEN_CHECKS'] = ['access', 'refresh']
+app.secret_key = 'jose' # app.config['JWT_SECRET_KEY']
 api = Api(app)
 
-jwt = JWT(app, authenticate, identity) # /auth (i.e. new endpoint)
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+jwt = JWTManager(app) # not creating /auth (i.e. new endpoint)
+
+@jwt._user_claims_loader
+def add_claims_to_jwt(identity):
+    if identity == 1:
+        return {'is_admin': True}
+    return {'is_admin': False}
+
+@jwt.token_in_blocklist_loader
+def check_if_token_in_blacklist(decrypt_token):
+    return decrypt_token['jti'] in BLACKLIST
+
+@jwt.expired_token_loader
+def expired_token_callback(self):
+    return jsonify({
+        'description': 'The token has expired.',
+        'error': 'token_expired'
+    }), 401
+
+@jwt.invalid_token_loader
+def invalid_token_callback(error):
+    return jsonify({
+        'description': 'Signature verification failed.',
+        'error': 'invalid_token'
+    }), 401
+
+@jwt.unauthorized_loader
+def missing_token_callback(error):
+    return jsonify({
+        'description': 'Request does not contain an access token.',
+        'error': 'authorization_required'
+    }), 401
+
+@jwt.need_fresh_token_loader
+def token_not_refresh_callback():
+    return jsonify({
+        'description': 'The token is not fresh.',
+        'error': 'fresh_token_required'
+    }), 401
+
+@jwt.revoked_token_loader
+def revoked_token_callback():
+    return jsonify({
+        'description': 'The token has been revoked.',
+        'error': 'token_revoked'
+    }), 401
 
 # Now we tell our API that the resource we have created (i.e. Student)
 # is now going to be accessible through our API.
@@ -26,6 +76,10 @@ api.add_resource(Item, '/item/<string:name>')
 api.add_resource(ItemList, '/items')
 api.add_resource(StoreList, '/stores')
 api.add_resource(UserRegister, '/register')
+api.add_resource(User, '/user/<int:user_id>')
+api.add_resource(UserLogin, '/login')
+api.add_resource(UserLogout, '/logout')
+api.add_resource(TokenRefresh, '/refresh')
 
 if __name__ == '__main__':
     from db import db
